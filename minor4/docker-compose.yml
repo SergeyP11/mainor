@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+      - redis
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/premiumcars
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      JWT_SECRET_KEY: super-secret-key
+    ports:
+      - "8080:8080"
+    networks:
+      - backend
+
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: premiumcars
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery worker --loglevel=info
+    depends_on:
+      - app
+      - redis
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/premiumcars
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    user: myuser
+    networks:
+      - backend
+
+volumes:
+  pgdata:
+
+networks:
+  backend:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Flask-приложение подключается к PostgreSQL
+# для сохранения данных и к Redis для работы с токенами
+#Celery использует Redis как брокер сообщений для получения задач от Flask-приложения и сохранения результатов.
+#Клиент (например, через curl или Postman) отправляет HTTP-запросы к Flask-приложению

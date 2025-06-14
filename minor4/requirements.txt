@@ -1,0 +1,8 @@
+flask
+flask-sqlalchemy
+flask-migrate
+redis
+pyjwt
+bcrypt
+celery
+psycopg2-binary
