@@ -22,7 +22,7 @@ app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'super-secret-key')
 app.config['TOKEN_TTL'] = timedelta(minutes=15)
 app.config['REDIS_URL'] = os.getenv('REDIS_URL', 'redis://redis:6379/0')
 # Задаём URL брокера сообщений для Celery
-# Celery использует Redis для передачи задач между Flask-приложением и worker’ом
+# Celery использует Redis для передачи задач между Flask-приложением и worker'ом
 app.config['CELERY_BROKER_URL'] = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
 app.config['CELERY_RESULT_BACKEND'] = os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
 
@@ -80,7 +80,7 @@ def token_exists(token):
 def refresh_token_ttl(token):
     redis_client.expire(token, app.config['TOKEN_TTL'])
 
-#При каждом запросе к защищённым endpoint’ам
+#При каждом запросе к защищённым endpoint'ам
 # (/submit, /request/<id>/status, /request/<id>/state)
 # middleware проверяет наличие токена в заголовке Authorization
 #Если токен валиден (существует в Redis и не истёк),
@@ -146,6 +146,9 @@ def submit_request():
     request_obj = Request(user_id=user.id)
     db.session.add(request_obj)
     db.session.commit()
+    # Добавляем начальное состояние
+    db.session.add(RequestState(request_id=request_obj.id, status='Pending'))
+    db.session.commit()
     process_request.delay(request_obj.id)
     return jsonify({'message': 'The application has been submitted', 'request_id': request_obj.id}), 200
 
@@ -158,28 +161,48 @@ def get_request_status(request_id):
         return jsonify({'error': 'The application was not found'}), 404
     return jsonify({'status': request_obj.status}), 200
 
-# @app.route('/request/<int:request_id>/state', methods=['POST'])
-# @auth_required
-# def get_request_state_at_time(request_id):
-#     user = User.query.filter_by(username=request.username).first()
-#     request_obj = Request.query.filter_by(id=request_id, user_id=user.id).first()
-#     if not request_obj:
-#         return jsonify({'error': 'The application was not found'}), 404
-#     data = request.get_json()
-#     timestamp = data.get('timestamp')
-#     if not timestamp:
-#         return jsonify({'error': 'A timestamp is required'}), 400
-#     try:
-#         timestamp = datetime.fromisoformat(timestamp)
-#     except ValueError:
-#         return jsonify({'error': 'Invalid timestamp format'}), 400
-#     state = RequestState.query.filter(
-#         RequestState.request_id == request_id,
-#         RequestState.timestamp <= timestamp
-#     ).order_by(RequestState.timestamp.desc()).first()
-#     if not state:
-#         return jsonify({'error': 'The status was not found at the specified time'}), 404
-#     return jsonify({'status': state.status, 'timestamp': state.timestamp.isoformat()}), 200
+@app.route('/request/<int:request_id>/state', methods=['POST'])
+@auth_required
+def get_request_state_at_time(request_id):
+    user = User.query.filter_by(username=request.username).first()
+    request_obj = Request.query.filter_by(id=request_id, user_id=user.id).first()
+    if not request_obj:
+        return jsonify({'error': 'The application was not found'}), 404
+    
+    data = request.get_json()
+    timestamp = data.get('timestamp')
+    if not timestamp:
+        return jsonify({'error': 'A timestamp is required'}), 400
+    
+    try:
+        # Преобразуем строку в объект datetime
+        timestamp = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return jsonify({'error': 'Invalid timestamp format. Use ISO format (YYYY-MM-DDTHH:MM:SS)'}), 400
+    
+    # Получаем состояние запроса на указанный момент времени
+    # Используем журнал действий (RequestState) для отслеживания изменений
+    state = RequestState.query.filter(
+        RequestState.request_id == request_id,
+        RequestState.timestamp <= timestamp
+    ).order_by(RequestState.timestamp.desc()).first()
+    
+    # Если состояние не найдено, возвращаем текущий статус запроса
+    if not state:
+        return jsonify({
+            'request_id': request_id,
+            'status': request_obj.status,
+            'timestamp': request_obj.created_at.isoformat(),
+            'current_status': request_obj.status,
+            'note': 'No historical state found, returning current status'
+        }), 200
+    
+    return jsonify({
+        'request_id': request_id,
+        'status': state.status,
+        'timestamp': state.timestamp.isoformat(),
+        'current_status': request_obj.status  # Добавляем текущий статус для сравнения
+    }), 200
 
 # Celery задача для обработки заявок
 @celery.task
